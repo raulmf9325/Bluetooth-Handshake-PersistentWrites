@@ -7,14 +7,43 @@
 //
 
 import UIKit
+import CoreBluetooth
 
 class ViewController: UIViewController {
 
+    @IBOutlet weak var numberOfPeripherals: UILabel!
+    
+   
+    
+    var manager: BluetoothManager?
+    
     override func viewDidLoad() {
         super.viewDidLoad()
-        // Do any additional setup after loading the view, typically from a nib.
+        manager = BluetoothManager()
+        manager?.delegate = self
     }
-
-
+    
+    @IBAction func startScan(_ sender: Any) {
+         manager?.centralManager.scanForPeripherals(withServices: [CBUUID(string: "FD25")], options: nil)
+    }
+    
+    @IBAction func StopScan(_ sender: Any) {
+        manager?.centralManager.stopScan()
+    }
+    
 }
 
+
+extension ViewController: PeripheralUpdateDelegate{
+    
+    func handleCharacteristicUpdate() {
+        guard let integer = numberOfPeripherals.text else {return}
+        guard var number = Int(integer) else {return}
+        number += 1
+        let text = String(number)
+        
+        self.numberOfPeripherals.text = text
+        
+    }
+    
+}
