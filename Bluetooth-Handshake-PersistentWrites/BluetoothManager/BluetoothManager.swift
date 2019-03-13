@@ -8,12 +8,14 @@
 
 
 
-import CoreBluetooth
+
 import UserNotifications
 import UIKit
+import CoreBluetooth
+
 
 protocol PeripheralUpdateDelegate {
-    func handleCharacteristicUpdate()
+    func handleCharacteristicUpdate(identifier: UUID)
 }
 
 struct ConnectedPeripheral{
@@ -59,8 +61,8 @@ class BluetoothManager: NSObject {
     var connectedCentral: ConnectedCentral?
     
     // Recently Discovered
-    var discoveredFDDevices = [CBPeripheral: Bool]()
-    
+    var discoveredDevices = [CBPeripheral: Bool]()
+    var handshakeWasSuccessfulFor = [CBPeripheral: Bool]()
     
     let UserPhoneCharacteristicUUID = CBUUID.init(string: "32D28D64-3B88-41B4-8138-4C183D93EF79")
     let ConfirmationCharacteristicUUID = CBUUID.init(string: "B746B607-447C-40B0-B066-3697431920C3")
@@ -76,12 +78,14 @@ class BluetoothManager: NSObject {
     
     var peripheralManager: CBPeripheralManager!
     var centralManager: CBCentralManager!
+    var timer: RepeatingTimer?
     
     
     override init() {
         super.init()
         peripheralManager = CBPeripheralManager(delegate: self, queue: nil)
         centralManager = CBCentralManager(delegate: self, queue: nil)
+        
     }
     
     fileprivate func processPhoneNumber(number: String){
@@ -97,19 +101,24 @@ class BluetoothManager: NSObject {
         peripheral.writeValue(centralPhone, for: confirmationCharacteristic, type: CBCharacteristicWriteType.withResponse)
     }
     
-    fileprivate func processPeripheral(){
-        
-        while !queue.isEmpty{
-            
-            for peripheral in queue{
-                if let deviceFound = discoveredFDDevices[peripheral]{
-                    /*  handshake was successful
-                     */
-                    queue.removeFirst()
+    var queueIsBeenProcessed = false
+    
+    fileprivate func processQueue(){
+        print("Processing queue")
+        if let peripheral = queue.first{
+            if handshakeWasSuccessfulFor[peripheral] ?? false{
+                queue.removeFirst()
+                print("elements in queue: \(queue.count)")
+                if !queue.isEmpty{
+                    processQueue()
                 }
                 else{
-                    centralManager.connect(peripheral, options: nil)
+                    queueIsBeenProcessed = false
                 }
+            }
+            else{
+                connectedPeripheral = ConnectedPeripheral(peripheral: peripheral)
+                centralManager.connect(peripheral, options: nil)
             }
         }
     }
@@ -127,7 +136,7 @@ extension BluetoothManager: CBPeripheralManagerDelegate {
         if peripheral.state == .poweredOn {
             // instantiate service
             service = CBMutableService(type: serviceUUID, primary: true)
-           
+            
             phoneCharacteristic = CBMutableCharacteristic(type: UserPhoneCharacteristicUUID, properties: [.read], value: nil, permissions: .readable)
             
             confirmationCharacteristic = CBMutableCharacteristic(type: ConfirmationCharacteristicUUID, properties: [.write], value: nil, permissions: .writeable)
@@ -150,9 +159,9 @@ extension BluetoothManager: CBPeripheralManagerDelegate {
         print("Read request received")
         if request.characteristic.uuid == phoneCharacteristic.uuid{
             phoneCharacteristic.value = advertisedPhone
-        
+            
             guard let length = phoneCharacteristic.value?.count else {return}
-           
+            
             if request.offset > length{
                 peripheralManager.respond(to: request, withResult: CBATTError.Code.invalidOffset)
                 print("ERROR: Invalid read request - invalid offset")
@@ -189,8 +198,8 @@ extension BluetoothManager: CBPeripheralManagerDelegate {
             
             /*  Alert user
              */
-            print("handshake I'm a peripheral")
-            delegate?.handleCharacteristicUpdate()
+            print("handshake I'm a peripheral - Central_Id: \(request.central.identifier)")
+            delegate?.handleCharacteristicUpdate(identifier: request.central.identifier)
         }
     }
     
@@ -211,7 +220,7 @@ extension BluetoothManager: CBPeripheralManagerDelegate {
             print("centralPhone: \(centralPhone)")
             if centralPhone == "no"{
                 /*  Central should cancel connection
-                    No user notification
+                 No user notification
                  */
             }
             else{
@@ -240,20 +249,24 @@ extension BluetoothManager: CBCentralManagerDelegate, CBPeripheralDelegate{
     
     // Did Discover Peripheral
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
+        //            timer = RepeatingTimer(timeInterval: 1)
+        //            timer?.eventHandler = {
+        //                print("Here")
+        //            }
+        //            timer?.resume()
         
-        if let deviceFound = discoveredFDDevices[peripheral]{
-            // device already found
+        if let alreadyDiscovered = discoveredDevices[peripheral]{
             return
         }
         else{
-            // enqueue device
-           // queue.append(peripheral)
-           // processPeripheral()
-            connectedPeripheral = ConnectedPeripheral(peripheral: peripheral)
-            discoveredFDDevices[peripheral] = true
-            central.connect(peripheral, options: nil)
+            print("enqueing")
+            discoveredDevices[peripheral] = true
+            queue.append(peripheral)
+            if !queueIsBeenProcessed{
+                queueIsBeenProcessed = true
+                processQueue()
+            }
         }
-        
     }
     
     // Did Connect
@@ -276,6 +289,11 @@ extension BluetoothManager: CBCentralManagerDelegate, CBPeripheralDelegate{
     
     // Did Discover Characteristics
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        
+        if let error = error{
+            print("ERROR discovering characteristic: \(error.localizedDescription)")
+            return
+        }
         
         if let characteristics = service.characteristics{
             for char in characteristics{
@@ -300,6 +318,11 @@ extension BluetoothManager: CBCentralManagerDelegate, CBPeripheralDelegate{
     // Peripheral Updated Value Of Characteristic
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         
+        if let error = error{
+            print("ERROR reading value from peripheral: \(error.localizedDescription)")
+            return
+        }
+        
         if characteristic.uuid == UserPhoneCharacteristicUUID{
             if let data = characteristic.value{
                 guard let phoneNumber = String(data: data, encoding: .utf8) else {
@@ -309,7 +332,7 @@ extension BluetoothManager: CBCentralManagerDelegate, CBPeripheralDelegate{
                 print("Phone number: \(phoneNumber)")
                 processPhoneNumber(number: phoneNumber)
             }
-    
+            
         }
         else if characteristic.uuid == PeripheralResponseCharacteristicUUID{
             if let data = characteristic.value{
@@ -320,9 +343,17 @@ extension BluetoothManager: CBCentralManagerDelegate, CBPeripheralDelegate{
                 if response == "yes"{
                     /*  Alert user
                      */
-                    print("handshake I'm a central")
-                    discoveredFDDevices[peripheral] = true
-                    delegate?.handleCharacteristicUpdate()
+                    
+                    
+                    delegate?.handleCharacteristicUpdate(identifier: peripheral.identifier)
+                    print("handshake I'm a central - Peripheral_Id: \(peripheral.identifier)")
+                    
+                    handshakeWasSuccessfulFor[peripheral] = true
+                    queueIsBeenProcessed = false
+                    if !queue.isEmpty{
+                        queueIsBeenProcessed = true
+                        processQueue()
+                    }
                 }
                 /*  Disconnect
                  */
@@ -340,13 +371,13 @@ extension BluetoothManager: CBCentralManagerDelegate, CBPeripheralDelegate{
         
         if connectedCentral?.confirmation == false{
             /*  Central didn't find peripheral's phone in its directory
-                cancel connection
+             cancel connection
              */
             centralManager.cancelPeripheralConnection(peripheral)
         }
         else{
             /*  Central found peripheral's phone
-                request peripheral's confirmation
+             request peripheral's confirmation
              */
             guard let char = connectedPeripheral?.responseCharacteristic else {return}
             print("Attempt to read peripheral's response")
@@ -364,7 +395,75 @@ extension BluetoothManager: CBCentralManagerDelegate, CBPeripheralDelegate{
     // Did Disconnect From Peripheral
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         print("Peripheral disconnected: \(peripheral)")
+        
+        if let handshakeSuccessful = handshakeWasSuccessfulFor[peripheral]{
+            if !handshakeSuccessful{
+                print("Reconnecting to: \(peripheral)")
+                queueIsBeenProcessed = true
+                processQueue()
+            }
+        }
+        else{
+            print("Reconnecting to: \(peripheral)")
+            queueIsBeenProcessed = true
+            processQueue()
+        }
+        
     }
     
+}
+
+class RepeatingTimer {
+    
+    let timeInterval: TimeInterval
+    
+    init(timeInterval: TimeInterval) {
+        self.timeInterval = timeInterval
+    }
+    
+    private lazy var timer: DispatchSourceTimer = {
+        let t = DispatchSource.makeTimerSource(flags: .init(rawValue: 0), queue: DispatchQueue.main)
+        t.schedule(deadline: .now() + self.timeInterval, repeating: self.timeInterval)
+        t.setEventHandler(handler: { [weak self] in
+            self?.eventHandler?()
+        })
+        return t
+    }()
+    
+    var eventHandler: (() -> Void)?
+    
+    private enum State {
+        case suspended
+        case resumed
+    }
+    
+    private var state: State = .suspended
+    
+    deinit {
+        timer.setEventHandler {}
+        timer.cancel()
+        /*
+         If the timer is suspended, calling cancel without resuming
+         triggers a crash. This is documented here https://forums.developer.apple.com/thread/15902
+         */
+        resume()
+        eventHandler = nil
+    }
+    
+    func resume() {
+        if state == .resumed {
+            return
+        }
+        state = .resumed
+        timer.resume()
+    }
+    
+    func suspend() {
+        if state == .suspended {
+            return
+        }
+        state = .suspended
+        timer.suspend()
+    }
 }
 

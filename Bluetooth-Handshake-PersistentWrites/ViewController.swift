@@ -10,21 +10,25 @@ import UIKit
 import CoreBluetooth
 
 class ViewController: UIViewController {
-
-    @IBOutlet weak var numberOfPeripherals: UILabel!
     
-   
+    @IBOutlet weak var numberOfPeripherals: UILabel!
+    @IBOutlet weak var textView: UITextView!
     
     var manager: BluetoothManager?
+    
+    var registeredDevices = [UUID]()
     
     override func viewDidLoad() {
         super.viewDidLoad()
         manager = BluetoothManager()
         manager?.delegate = self
+        
+        textView.isEditable = false
+        textView.font = UIFont.systemFont(ofSize: 12)
     }
     
     @IBAction func startScan(_ sender: Any) {
-         manager?.centralManager.scanForPeripherals(withServices: [CBUUID(string: "FD25")], options: nil)
+        manager?.centralManager.scanForPeripherals(withServices: [CBUUID(string: "FD25")], options: nil)
     }
     
     @IBAction func StopScan(_ sender: Any) {
@@ -36,13 +40,23 @@ class ViewController: UIViewController {
 
 extension ViewController: PeripheralUpdateDelegate{
     
-    func handleCharacteristicUpdate() {
-        guard let integer = numberOfPeripherals.text else {return}
-        guard var number = Int(integer) else {return}
-        number += 1
-        let text = String(number)
+    func handleCharacteristicUpdate(identifier: UUID) {
         
-        self.numberOfPeripherals.text = text
+        if !registeredDevices.contains(identifier){
+            
+            registeredDevices.append(identifier)
+            guard let integer = numberOfPeripherals.text else {return}
+            guard var number = Int(integer) else {return}
+            number += 1
+            let text = String(number)
+            
+            self.numberOfPeripherals.text = text
+            
+            guard var uuids = textView.text else {return}
+            uuids.append("\n")
+            uuids.append(identifier.uuidString)
+            textView.text = uuids
+        }
         
     }
     
