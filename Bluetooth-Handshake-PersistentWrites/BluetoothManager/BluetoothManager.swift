@@ -343,18 +343,18 @@ extension BluetoothManager: CBCentralManagerDelegate, CBPeripheralDelegate{
                 if response == "yes"{
                     /*  Alert user
                      */
-                    
-                    
                     delegate?.handleCharacteristicUpdate(identifier: peripheral.identifier)
-                    print("handshake I'm a central - Peripheral_Id: \(peripheral.identifier)")
-                    
-                    handshakeWasSuccessfulFor[peripheral] = true
-                    queueIsBeenProcessed = false
-                    if !queue.isEmpty{
-                        queueIsBeenProcessed = true
-                        processQueue()
-                    }
                 }
+                
+                print("handshake I'm a central - Peripheral_Id: \(peripheral.identifier)")
+                
+                handshakeWasSuccessfulFor[peripheral] = true
+                queueIsBeenProcessed = false
+                if !queue.isEmpty{
+                    queueIsBeenProcessed = true
+                    processQueue()
+                }
+                
                 /*  Disconnect
                  */
                 centralManager.cancelPeripheralConnection(peripheral)
